@@ -1,6 +1,6 @@
 # AI 智慧醫療掛號導引系統
 
-這是淡江大學資訊管理相關專題。系統透過 Android 問診介面收集症狀、危險徵兆與可看診時間，由 FastAPI Backend 控制問診流程與安全檢查，再依 SQL Server 的真實班表推薦科別、醫師與時段，並產生後續掛號導引步驟。
+系統透過 Android 問診介面收集症狀、危險徵兆與可看診時間，由 FastAPI Backend 控制問診流程與安全檢查，再依 SQL Server 的真實班表推薦科別、醫師與時段，並產生後續掛號導引步驟。
 
 > 正式 runtime 只有 `backend/` 與 `android/`。project-smart 的部分關鍵字概念已移植到正式 Backend adapter；repository 不再包含獨立的 reference source 資料夾。
 
