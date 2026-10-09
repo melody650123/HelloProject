@@ -1,113 +1,462 @@
-# AI 智慧醫療掛號導引系統
+# 導底看哪科－智慧看診指南
 
-系統透過 Android 問診介面收集症狀、危險徵兆與可看診時間，由 FastAPI Backend 控制問診流程與安全檢查，再依 SQL Server 的真實班表推薦科別、醫師與時段，並產生後續掛號導引步驟。
+> AI 智慧醫療掛號導引系統  
+> 從症狀描述、科別判斷、醫師推薦，到第三方醫院 App 掛號導引的一站式 Android 應用。
 
-> 正式 runtime 只有 `backend/` 與 `android/`。project-smart 的部分關鍵字概念已移植到正式 Backend adapter；repository 不再包含獨立的 reference source 資料夾。
+「導底看哪科」主要面向高齡者、不熟悉智慧型手機操作的使用者，以及偏好以國語／台語進行互動的族群。
 
-## 已完成的主要功能
+系統透過自然語言問診整理使用者的症狀與看診需求，協助判斷適合的就診科別，再結合實際門診班表與醫師資訊產生推薦結果。完成選擇後，可透過 Android Accessibility Service 提供跨 App 的智慧視覺導引，引導使用者前往醫院 App 完成掛號。
 
-- 四種 canonical `VisitType`：`initial`、`followup`、`quick_search`，以及相容用 `return_visit`。
-- 初診與複診的 Batch triage：一次顯示多題，以 keyed `answers` 一次 POST。
-- deterministic checklist、red flag safety gate、確認與修改流程。
-- 科別判斷、SQL 班表查詢、醫師專長／時間雙欄排序與無班表狀態。
-- 快速查詢跳過症狀問診與 AI，直接呼叫 `/schedules/search`；`/followup/recommend` 保留為相容 contract。
-- 正式 Runtime LLM 統一為 Cerebras `gpt-oss-120b`；AI 失敗時保留 deterministic fallback。
-- 國語／台語 ASR、TTS gateway 與 Android 系統 TTS 降級路徑。
-- 歷史紀錄、推薦選擇、`/generate_script` 與 Accessibility 視覺導引。
+---
 
-## 整體架構
+## 核心功能
+
+### 1. AI 智慧問診
+
+使用者可以以自然語言描述身體不適，系統逐步整理：
+
+- 主要症狀
+- 身體部位
+- 持續時間
+- 嚴重程度
+- 伴隨症狀
+- 危險徵兆
+- 可看診日期與時段
+- 醫師與專長偏好
+
+Backend 以 deterministic checklist 與安全檢查控制問診流程，AI 主要協助自然語言理解與資訊整理，避免將完整決策交由生成式模型處理。
+
+### 2. 科別推薦
+
+系統依據整理後的症狀證據建立適合的就診科別，並與正式科別資料進行比對。
+
+目前 MockDemo 初診案例示範：
+
+```text
+右膝疼痛
+＋ 上下樓梯與走久時較明顯
+＋ 偶爾腫脹
+＋ 無明顯外傷
+        ↓
+建議科別：一般骨科
+```
+
+### 3. 醫師與門診推薦
+
+科別確定後，Backend 從 SQL Server 查詢實際班表，再依：
+
+- 醫師專長
+- 可看診日期
+- 上午／下午時段
+- 使用者偏好
+- 初診／複診類型
+
+產生推薦結果。
+
+介面提供不同排序方式，讓使用者可以依「專長優先」或「時間優先」選擇適合的醫師。
+
+### 4. 國語／台語語音互動
+
+系統設計國語與台語語音互動管線，包括：
+
+- 語音輸入
+- ASR 語音辨識
+- TTS 語音播報
+- Android 系統語音降級機制
+- 預錄語音 Demo
+
+目前 MockDemo 初診流程使用固定劇本與預錄語音，以降低展示過程中的網路與外部服務依賴。
+
+一般問診的語音服務則可透過 Voice Gateway 串接外部 ASR／TTS 模型。
+
+### 5. 智慧視覺導引
+
+系統使用 Android `AccessibilityService` 與 Overlay 技術，在第三方醫院 App 上顯示紅框提示。
+
+掛號流程可依序引導使用者：
+
+```text
+選擇掛號
+    ↓
+選擇科別
+    ↓
+選擇日期
+    ↓
+選擇醫師
+    ↓
+填寫資料
+    ↓
+確認掛號
+```
+
+此設計不需要修改醫院既有 App，也不需要院方額外提供操作 API。
+
+目前示範對象為臺北榮總行動就醫服務 App。
+
+### 6. 掛號紀錄與取消導引
+
+系統保留使用者的問診與推薦結果，並依狀態區分：
+
+- 已完成
+- 未完成
+- 已取消
+
+對已完成的掛號紀錄，也可啟動取消掛號的智慧視覺導引。
+
+---
+
+## 使用流程
 
 ```mermaid
 flowchart LR
-    A["Android / Jetpack Compose"] -->|HTTP JSON / multipart| B["FastAPI Backend"]
-    B --> C["rule_engine + checklist"]
-    C --> D["AI provider（選擇性補強）"]
-    C --> E["SQL Server Schedule"]
-    E --> F["Recommendation"]
-    F --> G["generate_script"]
-    B --> H["Voice Gateway"]
+    A[選擇就診方式] --> B[AI 問診]
+    B --> C[症狀整理]
+    C --> D[科別推薦]
+    D --> E[查詢實際門診班表]
+    E --> F[推薦醫師與時段]
+    F --> G[確認預約資訊]
+    G --> H[智慧視覺導引]
+    H --> I[第三方醫院 App]
 ```
 
-Android 負責 UI、navigation、輸入與顯示；Backend 才是問診狀態、安全 gate、科別與推薦邏輯的正式來源。SQL Server 提供 `Schedule` 班表，AI 只在允許的位置協助文字理解或排序，不能決定流程是否完成。
+目前提供三種就診方式：
 
-## 三種使用者就診流程
+| 模式 | 說明 |
+|---|---|
+| 初診 | 第一次至醫院就診，進行症狀問診與推薦 |
+| 複診 | 曾於醫院就診，可進行問診並查詢複診班表 |
+| 快速查詢 | 已知道科別，直接依條件查詢門診班表 |
 
-| 使用者選擇 | Android 流程 | SQL `Schedule.visit_type` |
-|---|---|---|
-| `initial` | `VisitTypeSelection → Chat` | 初診 |
-| `followup` | `VisitTypeSelection → Chat` | 複診 |
-| `quick_search` | `VisitTypeSelection → QuickSearchScreen` | 複診 |
+---
 
-目前 SQL 實際資料模型只有「初診／複診」；快速查詢直接以 `GET /schedules/search` 查詢複診班表，不進問診或一般推薦流程。`return_visit` 仍保留為相容用 canonical value／route alias，Android route 會導向 `QuickSearchScreen`；一般推薦服務仍會做 strict visit type filter，不得跨類型推薦。
+## MockDemo
 
-## Batch triage、AI 與推薦
+目前 `mockdemo` 分支提供一套適合展示與錄影的初診流程。
 
-`batch_question_service` 依 `rule_engine` 的缺漏 checklist 組成最多六題；Android 以欄位 key 收集答案，再由 `batch_extraction_service` 先 deterministic parse，只有模糊欄位才可能呼叫設定的 AI provider。這降低 API calls 與 quota 使用，也改善逐題等待的 UX。
+```text
+VisitTypeSelection
+        ↓
+初診
+        ↓
+Chat
+固定右膝疼痛問診劇本
+        ↓
+一般骨科
+        ↓
+POST /mock-demo/prepare
+        ↓
+DoctorSelection
+查詢真實 SQL 班表
+        ↓
+選擇醫師
+        ↓
+POST /generate_script
+        ↓
+ConfirmNeed
+        ↓
+智慧視覺導引
+```
 
-推薦必須經過完成問診、使用者確認、科別判斷、visit type 與日期／時段可行性篩選。查無相符班表時顯示空狀態，不建立假醫師。
+### MockDemo 中固定與即時的部分
 
-## Voice
+| 功能 | 資料來源 |
+|---|---|
+| 初診聊天內容 | 固定 Demo Script |
+| 症狀案例 | 固定右膝疼痛案例 |
+| 推薦科別 | 一般骨科 |
+| 醫師／日期／門診 | 即時 SQL Server 班表 |
+| 掛號導引腳本 | Backend 產生 |
+| 聊天語音 | App 內預錄語音 |
 
-Backend 提供 `/voice/asr`、`/voice/chat`、`/voice/tts`、`/voice/health`，實際語音處理由外部 Voice Gateway 執行。ASR 曾完成 runtime 驗證；中文 TTS 下游服務未啟動時可安全降級，但完整外部 TTS 可用性仍取決於部署環境。
+因此 MockDemo 並不是完全假資料：
 
-## 主要資料夾
+> 前段問診保持展示穩定，後段醫師與班表仍使用正式資料來源。
 
-- `backend/`：唯一正式 FastAPI Backend、SQL adapter 與測試。
-- `android/`：唯一正式 Android App、Compose UI 與單元測試。
-- `scripts/`：Windows setup、Backend 與測試快捷腳本。
-- `docs/`：架構、操作、測試、限制與交接文件。
+更完整的 MockDemo 修改紀錄請參考 [`MOCKDEMO_CHANGES.md`](MOCKDEMO_CHANGES.md)。
 
-## 建議閱讀順序
+---
 
-第一次接手請先讀：
+## 系統架構
 
-1. [目前專案狀態](docs/PROJECT_STATUS.md)
-2. [系統架構](docs/ARCHITECTURE.md)
-3. [AI／Codex 交接指南](docs/AI_AGENT_HANDOFF.md)
+```mermaid
+flowchart LR
+    A[Android App<br/>Jetpack Compose]
+    B[FastAPI Backend]
+    C[Rule Engine]
+    D[AI Provider]
+    E[SQL Server]
+    F[Voice Gateway]
+    G[Accessibility Service]
+    H[Hospital App]
 
-再依工作範圍閱讀 [Backend](docs/BACKEND.md)、[Android](docs/ANDROID.md) 或 [AI 問診設計](docs/AI_TRIAGE.md)。
+    A -->|HTTP JSON| B
+    B --> C
+    C --> D
+    B --> E
+    A -->|Voice| B
+    B --> F
+    A --> G
+    G --> H
+```
 
-## 最短啟動方式
+### Android
 
-目前示範環境由手機經 Tailscale 連至 310 電腦，並在該電腦以 PowerShell 啟動 FastAPI。Windows PowerShell：
+負責：
+
+- Jetpack Compose UI
+- Navigation
+- 問診畫面
+- 醫師推薦畫面
+- 歷史紀錄
+- 語音輸入與播放
+- Accessibility Service
+- Overlay 智慧視覺導引
+
+### Backend
+
+負責：
+
+- 問診狀態管理
+- 症狀資訊整理
+- Red Flag 安全檢查
+- 科別判斷
+- 班表查詢
+- 醫師推薦
+- 掛號腳本產生
+- AI Provider 串接
+- Voice Gateway 串接
+
+---
+
+## 技術
+
+| 類別 | 技術 |
+|---|---|
+| Android | Kotlin |
+| UI | Jetpack Compose / Material 3 |
+| 架構 | MVVM |
+| Navigation | Navigation Compose |
+| 後端 | Python / FastAPI |
+| API | HTTP JSON / Multipart |
+| Database | SQL Server / pyodbc |
+| AI | Cerebras `gpt-oss-120b` |
+| Voice | ASR / TTS Voice Gateway |
+| Accessibility | Android AccessibilityService |
+| 視覺導引 | Android Overlay |
+| 測試 | JUnit / pytest |
+
+目前 Android 專案設定：
+
+- `minSdk 24`
+- `targetSdk 36`
+- Kotlin `2.2.10`
+- Android Gradle Plugin `9.0.0`
+
+---
+
+## 專案結構
+
+```text
+HelloProject/
+│
+├─ android/
+│  └─ app/
+│     └─ src/main/java/com/example/medicalaiguidance/
+│        ├─ demo/
+│        ├─ model/
+│        ├─ navigation/
+│        ├─ network/
+│        ├─ repository/
+│        ├─ screen/
+│        ├─ service/
+│        ├─ util/
+│        └─ viewmodel/
+│
+├─ backend/
+│  ├─ app/
+│  │  ├─ routes/
+│  │  └─ services/
+│  ├─ tests/
+│  └─ requirements.txt
+│
+├─ scripts/
+│  ├─ setup.ps1
+│  ├─ run-backend.ps1
+│  ├─ test-backend.ps1
+│  ├─ test-android.ps1
+│  └─ test-all.ps1
+│
+├─ .env.example
+├─ MOCKDEMO_CHANGES.md
+└─ README.md
+```
+
+---
+
+## 本機執行
+
+### 1. Clone
+
+```bash
+git clone -b mockdemo https://github.com/melody650123/HelloProject.git
+cd HelloProject
+```
+
+### 2. Backend 環境
+
+Windows PowerShell：
 
 ```powershell
 .\scripts\setup.ps1
+```
+
+將 `.env.example` 複製為：
+
+```text
+backend/.env
+```
+
+並依本機環境填入必要設定。
+
+例如：
+
+```env
+DB_DRIVER=ODBC Driver 17 for SQL Server
+DB_SERVER=
+DB_NAME=
+DB_USER=
+DB_PASSWORD=
+
+AI_PROVIDER=cerebras
+CEREBRAS_API_KEY=
+
+VOICE_ENABLED=false
+VOICE_GATEWAY_URL=http://localhost:8000
+VOICE_GATEWAY_KEY=
+```
+
+> `.env` 含有本機設定與敏感資訊，不應提交至 GitHub。
+
+### 3. 啟動 Backend
+
+```powershell
 .\scripts\run-backend.ps1 -Port 8080 -HostName 0.0.0.0
 ```
 
-另一個終端確認：
+測試：
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8080/health
+```
+
+正常應回傳：
+
+```json
+{
+  "status": "ok"
+}
+```
+
+### 4. Android API 位址
+
+建立或修改：
+
+```text
+android/local.properties
+```
+
+Android Emulator：
+
+```properties
+API_BASE_URL=http://10.0.2.2:8080
+```
+
+實體手機與 Backend 位於同一區域網路時：
+
+```properties
+API_BASE_URL=http://<Backend電腦IP>:8080
+```
+
+例如：
+
+```properties
+API_BASE_URL=http://192.168.1.100:8080
+```
+
+> `local.properties` 為本機設定，不應提交至 GitHub。
+
+### 5. Build Android
+
+```powershell
 cd android
+
+.\gradlew.bat testDebugUnitTest --no-daemon
 .\gradlew.bat assembleDebug --no-daemon
 ```
 
-手機端在 ignored 的 `android/local.properties` 設定 310 電腦的 Tailscale 位址；Android Emulator 則使用 `10.0.2.2` 連回 host。完整環境設定請見 [安裝與啟動](docs/SETUP_AND_RUN.md)。`.env` 與 `android/local.properties` 只留本機，禁止 commit。
+APK 產生於：
 
-## 測試狀態
+```text
+android/app/build/outputs/apk/debug/app-debug.apk
+```
 
-本分支整理後的最新完整結果記錄於 [測試指南](docs/TESTING.md)。Backend 使用 `pytest`，Android 使用 Gradle unit test，並以 `assembleDebug` 驗證 APK build。
+---
 
-## Known limitations 摘要
+## Backend 測試
 
-- Cerebras adapter 與 `gpt-oss-120b` 設定已存在，但尚未以正式可用 Key 完成真實 API smoke test。
-- 中文 TTS 依賴外部 downstream service；服務未啟動時只能降級。
-- case store 是 in-memory，不適合重啟保存或多 worker。
-- Accessibility／實際院方 App 自動掛號仍需要完整實機端到端驗證。
+```powershell
+.\scripts\test-backend.ps1
+```
 
-詳見 [Known Issues](docs/KNOWN_ISSUES.md)。
+或執行完整 baseline：
 
-## 文件索引
+```powershell
+.\scripts\test-all.ps1
+```
 
-- [PROJECT_STATUS](docs/PROJECT_STATUS.md)：目前做到哪裡。
-- [ARCHITECTURE](docs/ARCHITECTURE.md)：系統與資料流架構。
-- [BACKEND](docs/BACKEND.md)：FastAPI routes、services 與 state。
-- [ANDROID](docs/ANDROID.md)：Compose、navigation、ViewModel 與 network。
-- [AI_TRIAGE](docs/AI_TRIAGE.md)：deterministic state machine 與 AI 邊界。
-- [SETUP_AND_RUN](docs/SETUP_AND_RUN.md)：Windows、SQL、Emulator、Voice、AI 設定。
-- [TESTING](docs/TESTING.md)：測試指令、結果與 runtime checklist。
-- [KNOWN_ISSUES](docs/KNOWN_ISSUES.md)：已知限制與優先級。
-- [AI_AGENT_HANDOFF](docs/AI_AGENT_HANDOFF.md)：GPT／Codex 接手規則。
-- [CONTRIBUTING](CONTRIBUTING.md)：人類組員 Git 協作方式。
+---
+
+## 目前限制
+
+本專案仍屬研究與原型開發階段。
+
+目前需要注意：
+
+- MockDemo 的醫師與日期會依 SQL Server 實際班表改變。
+- Voice Gateway 為外部服務，未啟動時部分 ASR／TTS 功能不可使用。
+- Backend case store 目前為 in-memory，不適合正式多節點部署。
+- Accessibility 視覺導引依第三方 App UI 結構運作，若院方 App 更新介面，導引腳本可能需要重新調整。
+- MockDemo 初診主要以固定劇本確保展示穩定，並不代表所有正式問診流程皆使用固定回答。
+
+---
+
+## 隱私與安全
+
+Repository 不應包含：
+
+- Database password
+- API Key
+- Voice Gateway Key
+- 個人本機 IP
+- `.env`
+- `local.properties`
+
+請使用 `.env.example` 作為設定範本。
+
+---
+
+## 免責聲明
+
+本系統為學術研究與原型展示用途。
+
+系統提供的症狀整理、科別推薦與掛號協助不能取代專業醫療診斷。若使用者出現嚴重或緊急症狀，應立即尋求正式醫療協助。
+
+---
+
+## Project Status
+
+目前重點流程為：
+
+**Android 問診 → 科別推薦 → 真實門診班表 → 醫師選擇 → 預約資訊確認 → 智慧視覺掛號導引**
+
+MockDemo 已提供可展示的完整初診流程。
